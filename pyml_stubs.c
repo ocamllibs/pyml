@@ -6,6 +6,7 @@
 #include <caml/custom.h>
 #include <caml/alloc.h>
 #include <caml/intext.h>
+#include <caml/unixsupport.h>
 #include <string.h>
 #include <stdbool.h>
 #include <stdio.h>
