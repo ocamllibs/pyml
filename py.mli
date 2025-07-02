@@ -739,16 +739,16 @@ module Dict: sig
   (** [to_bindings_string o] returns all the pairs [(key, value)] in the Python
       dictionary [o]. *)
 
-  val to_bindings_seq: Object.t -> (Object.t * Object.t) Stdcompat.Seq.t
+  val to_bindings_seq: Object.t -> (Object.t * Object.t) Seq.t
   (** [to_bindings_seq o] returns the ephemeral sequence of all the pairs
       (key, value) in the Python dictionary [o]. *)
 
   val to_bindings_seq_map: (Object.t -> 'a) -> (Object.t -> 'b) -> Object.t ->
-    ('a * 'b) Stdcompat.Seq.t
+    ('a * 'b) Seq.t
   (** [to_bindings_seq_map fkey fvalue o] returns the ephemeral sequence of all
       the pairs (fkey key, fvalue value) in the Python dictionary [o]. *)
 
-  val to_bindings_string_seq: Object.t -> (string * Object.t) Stdcompat.Seq.t
+  val to_bindings_string_seq: Object.t -> (string * Object.t) Seq.t
   (** [to_bindings_string_seq o] returns the ephemeral sequence of all the pairs
       (key, value) in the Python dictionary [o]. *)
 
@@ -1100,35 +1100,35 @@ module Iter: sig
       tail-recursive and [f] is applied to the elements of [s] in the reverse
       order. *)
 
-  val of_seq: Object.t Stdcompat.Seq.t -> Object.t
+  val of_seq: Object.t Seq.t -> Object.t
   (** [of_seq s] returns an interator that iterates over the values of the
       sequence [s]. *)
 
-  val of_seq_map: ('a -> Object.t) -> 'a Stdcompat.Seq.t -> Object.t
+  val of_seq_map: ('a -> Object.t) -> 'a Seq.t -> Object.t
   (** [of_seq_map f s] returns an interator that iterates over the results of
       [f] applied to the values of the sequence [s].
       [Py.Iter.of_seq_map f s] is equivalent to
       [Py.Iter.of_seq (Seq.map f s)]. *)
 
-  val to_seq: Object.t -> Object.t Stdcompat.Seq.t
+  val to_seq: Object.t -> Object.t Seq.t
   (** [to_seq i] returns the sequence of the values from the iteration [i].
       The Python iteration is consumed while the sequence is browsed.
       Values are memoized, so that the sequence can be browsed many times. *)
 
-  val to_seq_map: (Object.t -> 'a) -> Object.t -> 'a Stdcompat.Seq.t
+  val to_seq_map: (Object.t -> 'a) -> Object.t -> 'a Seq.t
   (** [to_seq_map f i] returns the sequence of the results of [f] applied to the
       values from the iteration [i].
       The Python iteration is consumed while the sequence is browsed.
       Values are memoized, so that the sequence can be browsed many times. *)
 
-  val unsafe_to_seq: Object.t -> Object.t Stdcompat.Seq.t
+  val unsafe_to_seq: Object.t -> Object.t Seq.t
   (** [unsafe_to_seq i] returns the sequence of the values from the iteration
       [i].
       The Python iteration is consumed while the sequence is browsed.
       Warning: values are not memoized, so that the sequence can be browsed
       only once. *)
 
-  val unsafe_to_seq_map: (Object.t -> 'a) -> Object.t -> 'a Stdcompat.Seq.t
+  val unsafe_to_seq_map: (Object.t -> 'a) -> Object.t -> 'a Seq.t
   (** [unsafe_to_seq_map f i] returns the sequence of the results of [f] applied
       to the values from the iteration [i].
       The Python iteration is consumed while the sequence is browsed.
@@ -1255,13 +1255,13 @@ module List: sig
   val of_sequence: Object.t -> Object.t
   (** Equivalent to {!Sequence.list}. *)
 
-  val of_seq: Object.t Stdcompat.Seq.t -> Object.t
+  val of_seq: Object.t Seq.t -> Object.t
   (** [of_seq s] returns the Python list with the same elements as [s]. *)
 
-  val to_seq: Object.t -> Object.t Stdcompat.Seq.t
+  val to_seq: Object.t -> Object.t Seq.t
   (** Equivalent to {!Sequence.to_seq}. *)
 
-  val to_seqi: Object.t -> (int * Object.t) Stdcompat.Seq.t
+  val to_seqi: Object.t -> (int * Object.t) Seq.t
   (** Equivalent to {!Sequence.to_seqi}. *)
 
   val singleton: Object.t -> Object.t
@@ -1762,11 +1762,11 @@ module Sequence: sig
       tail-recursive and [f] is applied to the elements of [s] in the reverse
       order. *)
 
-  val to_seq: Object.t -> Object.t Stdcompat.Seq.t
+  val to_seq: Object.t -> Object.t Seq.t
   (** [to_seq s] returns the OCaml sequence of the values from the Python
       sequence [s]. *)
 
-  val to_seqi: Object.t -> (int * Object.t) Stdcompat.Seq.t
+  val to_seqi: Object.t -> (int * Object.t) Seq.t
   (** [to_seqi s] returns the OCaml indexed sequence of the values from the
       Python sequence [s]. *)
 
@@ -1853,7 +1853,7 @@ module String: sig
   (** [of_string s] returns the Python string with the value [s].
       [s] should be a valid UTF-8 string. *)
 
-  val of_bytes: Stdcompat.bytes -> Object.t
+  val of_bytes: bytes -> Object.t
   (** Same as [of_string] but with an argument of type [bytes]. *)
 
   val to_string: Object.t -> string
@@ -1861,7 +1861,7 @@ module String: sig
       A failure ([Failure _]) is raised if [o] is neither a
       [String]/[Bytes] value nor a [Unicode] value. *)
 
-  val to_bytes: Object.t -> Stdcompat.bytes
+  val to_bytes: Object.t -> bytes
   (** Same as [to_string] but with an a result of type [bytes]. *)
 
   val of_unicode: ?size:int -> int array -> Object.t
@@ -1880,13 +1880,13 @@ module Bytes: sig
   (** [of_string s] returns the Python byte sequence with the contents of
       [s]. *)
 
-  val of_bytes: Stdcompat.bytes -> Object.t
+  val of_bytes: bytes -> Object.t
   (** Same as [of_string] but with an argument of type [bytes]. *)
 
   val to_string: Object.t -> string
   (** [to_string o] returns the string contained in the Python value [o]. *)
 
-  val to_bytes: Object.t -> Stdcompat.bytes
+  val to_bytes: Object.t -> bytes
   (** Same as [to_string] but with an a result of type [bytes]. *)
 
   val length: Object.t -> int
@@ -1963,13 +1963,13 @@ module Tuple: sig
   val to_list_map: (Object.t -> 'a) -> Object.t -> 'a list
   (** Equivalent to {!Sequence.to_list_map}. *)
 
-  val of_seq: Object.t Stdcompat.Seq.t -> Object.t
+  val of_seq: Object.t Seq.t -> Object.t
   (** [of_seq s] returns the Python tuple with the values of the sequence s. *)
 
-  val to_seq: Object.t -> Object.t Stdcompat.Seq.t
+  val to_seq: Object.t -> Object.t Seq.t
   (** Equivalent to {!Sequence.to_seq}. *)
 
-  val to_seqi: Object.t -> (int * Object.t) Stdcompat.Seq.t
+  val to_seqi: Object.t -> (int * Object.t) Seq.t
   (** Equivalent to {!Sequence.to_seqi}. *)
 
   val fold_left: ('a -> Object.t -> 'a) -> 'a -> Object.t -> 'a
@@ -2172,7 +2172,7 @@ module Array: sig
   val pyarray_type: unit -> Object.t
   (** Returns the type of Numpy arrays. *)
 
-  val numpy: Stdcompat.floatarray -> Object.t
+  val numpy: floatarray -> Object.t
   (** [numpy a] returns a Numpy array that shares the same contents than
       the OCaml array [a].
       The array is passed in place (without copy) which relies on the
@@ -2182,7 +2182,7 @@ module Array: sig
       Note that the {!Numpy} module provides a more general interface
       between Numpy arrays and OCaml bigarrays. *)
 
-  val numpy_get_array: Object.t -> Stdcompat.floatarray
+  val numpy_get_array: Object.t -> floatarray
   (** [numpy_get_array a] returns the OCaml array from which the Numpy
       array [a] has been converted from. Note that this function fails
       if [a] has not been obtained by calling the {!numpy} function

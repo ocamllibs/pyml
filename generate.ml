@@ -1,5 +1,3 @@
-open Stdcompat
-
 type ty =
     PyObject of bool
   | PyCompilerFlags | String | WideString | Int | Int64 | Long | Size | IntPtr

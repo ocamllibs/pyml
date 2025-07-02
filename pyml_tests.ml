@@ -536,9 +536,9 @@ let () =
         Pyml_tests_common.Disabled "numpy is not available"
       else
         begin
-          let array = Stdcompat.Array.Floatarray.create 2 in
-          Stdcompat.Array.Floatarray.set array 0 1.;
-          Stdcompat.Array.Floatarray.set array 1 2.;
+          let array = Array.Floatarray.create 2 in
+          Array.Floatarray.set array 0 1.;
+          Array.Floatarray.set array 1 2.;
           let a = Py.Array.numpy array in
           let m = Py.Import.add_module "test" in
           Py.Module.set m "array" a;
@@ -550,8 +550,8 @@ assert array[1] == 2.
 array[0] = 42.
 array[1] = 43.
 ");
-          assert (Stdcompat.Array.Floatarray.get array 0 = 42.);
-          assert (Stdcompat.Array.Floatarray.get array 1 = 43.);
+          assert (Array.Floatarray.get array 0 = 42.);
+          assert (Array.Floatarray.get array 1 = 43.);
           Pyml_tests_common.Passed
         end)
 
@@ -562,7 +562,7 @@ let () =
         Pyml_tests_common.Disabled "numpy is not available"
       else
         begin
-          let array = Stdcompat.Float.Array.init 0x10000 float_of_int in
+          let array = Float.Array.init 0x10000 float_of_int in
           let numpy_array = Py.Array.numpy array in
           let add =
             Py.Module.get_function (Py.Import.import_module "numpy") "add" in
@@ -571,16 +571,16 @@ let () =
               numpy_array
             else
               let array =
-                Stdcompat.Float.Array.map_from_array Stdcompat.Fun.id
+                Float.Array.map_from_array Fun.id
                   (Py.Sequence.to_array_map Py.Float.to_float
                      (add [| numpy_array; numpy_array |])) in
               crunch (Py.Array.numpy array) (pred n) in
           ignore (crunch (Py.Array.numpy array) 0x100);
-          assert (Stdcompat.Float.Array.length array = 0x10000);
+          assert (Float.Array.length array = 0x10000);
           for i = 0 to 0x10000 - 1 do
-            assert (Stdcompat.Float.Array.get array i = float_of_int i)
+            assert (Float.Array.get array i = float_of_int i)
           done;
-          Stdcompat.Float.Array.set array 1 42.;
+          Float.Array.set array 1 42.;
           assert (Py.Float.to_float (Py.Sequence.get numpy_array 1) = 42.);
           Pyml_tests_common.Passed
         end)
