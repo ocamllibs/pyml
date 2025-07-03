@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+    
+# Cancel previous versions of this job that are still running.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+  
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        ocaml-version:
+          - 4.08.1
+          - 4.09.1
+          - 4.10.2
+          - 4.11.2
+          - 4.12.1
+          - 4.13.1
+          - 4.14.2
+          - 5.0.0
+          - 5.1.1
+          - 5.2.1
+          - 5.3.0
+        operating-system: [ubuntu-latest]
+    runs-on: ${{ matrix.operating-system }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+      - run: pip install numpy
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ matrix.ocaml-version }}
+          dune-cache: true
+      - run: opam install . --deps-only --with-test --with-doc
+      - name: Build
+        run: opam exec -- dune build @all
+      - name: Test
+        run: opam exec -- dune test

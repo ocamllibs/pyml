@@ -32,7 +32,7 @@ let () =
         Pyml_tests_common.Disabled "numpy is not available"
       else
         begin
-          let array = [| [| 1.; 2.; 3. |]; [| -1.23; Stdcompat.Float.nan; 2.72 |] |] in
+          let array = [| [| 1.; 2.; 3. |]; [| -1.23; Float.nan; 2.72 |] |] in
           let array2 =
             Bigarray.Array2.of_array (Bigarray.float64) (Bigarray.c_layout) array in
           let bigarray = Bigarray.genarray_of_array2 array2 in
@@ -84,7 +84,7 @@ callback(numpy.array([0,1,2,3]))
         end)
 
 let assert_almost_eq ?(eps = 1e-7) f1 f2 =
-  if Stdcompat.Float.abs (f1 -. f2) > eps then
+  if Float.abs (f1 -. f2) > eps then
     failwith (Printf.sprintf "%f <> %f" f1 f2)
 
 let () =
@@ -104,7 +104,7 @@ let () =
               assert_almost_eq (Bigarray.Array2.get array2 i j) v in
             let assert_is_nan i j =
               let v = Bigarray.Array2.get array2 i j in
-              assert (Stdcompat.Float.is_nan v) in
+              assert (Float.is_nan v) in
             assert_almost_eq 0 0 0.12;
             assert_almost_eq 0 1 1.23;
             assert_almost_eq 0 2 2.34;
@@ -166,7 +166,7 @@ let () =
               assert (Numpy.compare_kind kind Bigarray.nativeint = 0);
               assert (Numpy.compare_layout layout Bigarray.c_layout = 0);
               let bigarray =
-                Stdcompat.Option.get (Numpy.check_kind_and_layout
+                Option.get (Numpy.check_kind_and_layout
                   Bigarray.nativeint Bigarray.c_layout array) in
               assert (Bigarray.Genarray.dims bigarray = [| 4 |]);
               let array1 = Bigarray.array1_of_genarray bigarray in

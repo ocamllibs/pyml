@@ -1,8 +1,3 @@
-module Stdlib_printexc = Printexc
-(* Workaround for opaque Printexc bug in Stdcompat 9 *)
-
-open Stdcompat
-
 type pyobject = Pytypes.pyobject
 
 type input = Pytypes.input = Single | File | Eval
@@ -232,7 +227,7 @@ let libpython_from_interpreter python_full_path =
   let lines = ldd python_full_path in
   let is_libpython line =
     let basename = Filename.basename line in
-    Stdcompat.String.starts_with ~prefix:"libpython" basename in
+    String.starts_with ~prefix:"libpython" basename in
   List.find_opt is_libpython lines
 
 let libpython_from_ldconfig major minor =
@@ -245,7 +240,7 @@ let libpython_from_ldconfig major minor =
         Printf.sprintf "libpython%d.%d" major' minor' in
   let is_libpython line =
     let basename = Filename.basename line in
-    Stdcompat.String.starts_with ~prefix:prefix basename in
+    String.starts_with ~prefix:prefix basename in
   List.find_opt is_libpython lines
 
 let parse_python_list list =
@@ -690,7 +685,7 @@ let path_separator =
 let keep_sigint f =
   let previous_signal_behavior = Sys.signal Sys.sigint Sys.Signal_ignore in
   Sys.set_signal Sys.sigint previous_signal_behavior;
-  Stdcompat.Fun.protect f
+  Fun.protect f
     ~finally:(fun () -> Sys.set_signal Sys.sigint previous_signal_behavior)
 
 let initialize ?library_name ?interpreter ?version
@@ -1772,7 +1767,7 @@ let exception_printer exn =
         (Object.to_string value))
   | _ -> None
 
-let () = Stdlib_printexc.register_printer exception_printer
+let () = Printexc.register_printer exception_printer
 
 module Long = struct
   let check o = Type.get o = Type.Long
@@ -2064,7 +2059,6 @@ module Iter_ = struct
     seq
 end
 
-(* From stdcompat *)
 let vec_to_seq length get v =
   let length = length v in
   let rec aux i () =
@@ -3059,7 +3053,7 @@ let compile ~source ~filename ?dont_inherit ?optimize mode =
     | `Eval -> Eval
     | `Single -> Single in
   let optimize =
-    Stdcompat.Option.map (function
+    Option.map (function
         | `Default -> Default
         | `Debug -> Debug
         | `Normal -> Normal

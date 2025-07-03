@@ -1,0 +1,35 @@
+(rule
+ (enabled_if
+  (>= %{ocaml_version} 4.14))
+ (target in_channel.ml)
+ (deps in_channel.ml.after_4_14)
+ (action
+  (copy %{deps} %{target})))
+
+(rule
+ (enabled_if
+  (< %{ocaml_version} 4.14))
+ (target in_channel.ml)
+ (deps in_channel.ml.before_4_14)
+ (action
+  (copy %{deps} %{target})))
+
+(rule
+ (enabled_if
+  (>= %{ocaml_version} 4.13))
+ (target string.ml)
+ (deps string.ml.after_4_13)
+ (action
+  (copy %{deps} %{target})))
+
+(rule
+ (enabled_if
+  (< %{ocaml_version} 4.13))
+ (target string.ml)
+ (deps string.ml.before_4_13)
+ (action
+  (copy %{deps} %{target})))
+
+(library
+ (public_name pyml.compat)
+ (name compat))
