@@ -5,7 +5,9 @@
   (language c)
   (names numpy_stubs pyml_stubs))
  (wrapped false)
- (libraries unix bigarray))
+ (libraries unix bigarray compat)
+ (flags
+  (:standard -open Compat)))
 
 (executables
  (names generate)
