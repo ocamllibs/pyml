@@ -25,7 +25,7 @@
  (description "OCaml bindings for Python 2 and Python 3")
  (depends
   (ocaml
-   (>= 4.05))
+   (>= 4.08))
   (ocamlfind :build)
   (conf-python-3-dev :with-test))
  (depopts utop))
