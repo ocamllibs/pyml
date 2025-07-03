@@ -44,6 +44,6 @@ jobs:
           dune-cache: true
       - run: opam install . --deps-only --with-test --with-doc
       - name: Build
-        run: dune build @all
+        run: opam exec -- dune build @all
       - name: Test
-        run: make test
+        run: opam exec -- make test
