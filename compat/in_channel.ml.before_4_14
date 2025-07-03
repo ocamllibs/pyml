@@ -1,5 +1,3 @@
-include Stdlib.In_channel
-
 let with_open_bin s f =
   let ic = open_bin s in
   Fun.protect
