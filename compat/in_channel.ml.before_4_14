@@ -1,5 +1,5 @@
 let with_open_bin s f =
-  let ic = open_bin s in
+  let ic = open_in_bin s in
   Fun.protect
     ~finally:(fun () -> Stdlib.close_in_noerr ic)
     (fun () -> f ic)
