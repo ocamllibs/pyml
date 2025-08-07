@@ -1,6 +1,6 @@
 description = "py.ml: OCaml bindings for Python"
 requires = "unix stdcompat"
-version = "20231101"
+version = "20250807"
 archive(byte) = "pyml.cma numpy.cma"
 archive(native) = "pyml.cmxa numpy.cmxa"
 plugin(byte) = "pyml.cma numpy.cma"

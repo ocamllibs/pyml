@@ -1,5 +1,13 @@
 [*] marks changes that break compatibility with previous versions.
 
+# 2025-08-07
+
+- Support OCaml only back to 4.11
+
+- Stop including stdcompat.h
+
+- Update package metadata
+
 # 2023-11-01
 
 - Compatibility with Python 3.13
