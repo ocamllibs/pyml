@@ -4,18 +4,18 @@
 
 (license BSD-2-Clause)
 
-(maintainers "Thierry Martinez <martinez@nsup.org>")
+(maintainers "Seb Hinderer <sebastien.hinderer@inria.fr>")
 
 (authors "Thierry Martinez <martinez@nsup.org>")
 
 (source
- (github thierry-martinez/pyml))
+ (github ocamllibs/pyml))
 
-(bug_reports "http://github.com/thierry-martinez/pyml/issues")
+(bug_reports "http://github.com/ocamllibs/pyml/issues")
 
-(homepage "http://github.com/thierry-martinez/pyml")
+(homepage "http://github.com/ocamllibs/pyml")
 
-(documentation "http://github.com/thierry-martinez/pyml")
+(documentation "https://github.com/ocamllibs/pyml")
 
 (generate_opam_files true)
 
@@ -24,8 +24,7 @@
  (synopsis "OCaml bindings for Python")
  (description "OCaml bindings for Python 2 and Python 3")
  (depends
-  (ocaml (>= 3.12.1))
-  (ocamlfind :build)
+  (ocaml (>= 4.11.0))
   (stdcompat (>= 18))
   (conf-python-3-dev :with-test))
  (depopts utop))
