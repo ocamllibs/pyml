@@ -14,7 +14,7 @@ type t = Windows | Mac | Unix
 let os = PLATFORM_NAME
 
 #ifdef WIN_HANDLE_FD
-  external fd_of_int : int -> Unix.file_descr = "win_handle_fd"
+  external fd_of_int : int -> Unix.file_descr = "caml_unix_filedescr_of_fd"
 #else
   external fd_of_int : int -> Unix.file_descr = "%identity"
 #endif
