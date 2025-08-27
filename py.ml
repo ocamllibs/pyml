@@ -522,7 +522,7 @@ let find_library_path version_major version_minor python_full_path =
         Option.bind version_minor (fun version_minor ->
           libpython_from_pythonpath version_major version_minor)));
   ] in
-  List.concat (List.map (fun f -> Option.value ~default:[] (f ())) heuristics)
+  List.concat (List.map (fun f -> Option.value ~default:[] (try f () with _ -> None)) heuristics)
 
 let python_version_from_interpreter interpreter =
   let version_line =
