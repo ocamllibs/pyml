@@ -11,6 +11,23 @@
   (libraries stdcompat))
 
 (rule
+  (target pymltop_libdir.ml)
+  (action (with-stdout-to %{target}
+    (run echo "let libdir=\"%{project_root}/lib/pyml/\""))))
+
+(executable
+  (name pytop)
+  (public_name pymltop)
+  (modules pytop pymltop_libdir)
+  (libraries compiler-libs))
+
+(executable
+  (name pyutop)
+  (public_name pymlutop)
+  (modules pyutop)
+  (libraries utop))
+
+(rule
   (targets pywrappers.ml pyml.h pyml_dlsyms.inc pyml_wrappers.inc)
   (deps (:gen generate.exe))
   (action (run %{gen})))
