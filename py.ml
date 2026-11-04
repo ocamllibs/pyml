@@ -374,44 +374,6 @@ let library_suffix =
   | Pyml_arch.Mac -> ".dylib"
   | _ -> ".so"
 
-let libpython_from_pkg_config version_major version_minor =
-  let command =
-    Printf.sprintf "pkg-config --libs python-%d.%d" version_major
-      version_minor in
-  match run_command_opt command false with
-    Some (words :: _) ->
-      let word_list = String.split_on_char ' ' words in
-      let unable_to_parse () =
-        let msg = Printf.sprintf
-        "Py.find_library_path: unable to parse the output of pkg-config '%s'"
-            words in
-        failwith msg in
-      let parse_word (library_paths, library_filename) word =
-        if String.length word > 2 then
-          match String.sub word 0 2 with
-            "-L" ->
-              let word' =
-                Pyutils.substring_between word 2 (String.length word) in
-              (word' :: library_paths, library_filename)
-          | "-l" ->
-              let word' =
-                Pyutils.substring_between word 2 (String.length word) in
-              if library_filename <> None then
-                unable_to_parse ();
-              let library_filename =
-                Printf.sprintf "lib%s%s" word' library_suffix in
-              (library_paths, Some library_filename)
-          | _ -> (library_paths, library_filename)
-        else (library_paths, library_filename) in
-      let (library_paths, library_filename) =
-        List.fold_left parse_word ([], None) word_list in
-      let library_filename =
-        match library_filename with
-          None -> unable_to_parse ()
-        | Some library_filename -> library_filename in
-      Some (concat_library_filenames library_paths [library_filename])
-  | _ -> None
-
 let library_patterns : (int -> int -> string) list =
   match Pyml_arch.os with
   | Pyml_arch.Windows ->
@@ -457,6 +419,48 @@ let libpython_from_python_config_prefix version_major version_minor =
   | Some (prefix :: _) ->
       let library_paths = [Filename.concat prefix "lib"] in
       Some (library_filenames_from_paths version_major version_minor library_paths)
+  | _ -> None
+
+(* Since Python 3.8, [pkg-config --libs python-X.Y] gives no [-l] flag for
+   libpython (only [python-X.Y-embed] does), and the framework builds of
+   macOS (Homebrew) only give a [-L] flag: the library is then looked for
+   with the usual names in the [-L] directories. *)
+let libpython_from_pkg_config version_major version_minor =
+  let pkg_config package =
+    match
+      run_command_opt (Printf.sprintf "pkg-config --libs %s" package) false
+    with
+    | Some (words :: _) -> Some words
+    | _ -> None in
+  let packages = [
+    Printf.sprintf "python-%d.%d-embed" version_major version_minor;
+    Printf.sprintf "python-%d.%d" version_major version_minor] in
+  match List.find_map pkg_config packages with
+  | Some words ->
+      let word_list = String.split_on_char ' ' words in
+      let parse_word (library_paths, library_filenames) word =
+        if String.length word > 2 then
+          let argument = Pyutils.substring_between word 2 (String.length word) in
+          match String.sub word 0 2 with
+          | "-L" -> (argument :: library_paths, library_filenames)
+          | "-l" when String.length argument >= 6
+              && String.sub argument 0 6 = "python" ->
+              (library_paths,
+                Printf.sprintf "lib%s%s" argument library_suffix
+                :: library_filenames)
+          | _ -> (library_paths, library_filenames)
+        else (library_paths, library_filenames) in
+      let (library_paths, library_filenames) =
+        List.fold_left parse_word ([], []) word_list in
+      let library_paths = List.rev library_paths in
+      begin match library_filenames with
+      | [] ->
+          Some (library_filenames_from_paths version_major version_minor
+            library_paths)
+      | _ ->
+          Some (concat_library_filenames library_paths
+            (List.rev library_filenames))
+      end
   | _ -> None
 
 let getenv_opt var =
@@ -522,7 +526,11 @@ let find_library_path version_major version_minor python_full_path =
         Option.bind version_minor (fun version_minor ->
           libpython_from_pythonpath version_major version_minor)));
   ] in
-  List.concat (List.map (fun f -> Option.value ~default:[] (f ())) heuristics)
+  (* A heuristic that fails (on an unexpected output of a command) must not
+     prevent the others from finding the library. *)
+  let candidates f =
+    try Option.value ~default:[] (f ()) with Failure _ -> [] in
+  List.concat (List.map candidates heuristics)
 
 let python_version_from_interpreter interpreter =
   let version_line =

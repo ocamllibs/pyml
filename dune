@@ -42,6 +42,12 @@
   (modules pyml_tests)
   (libraries pyml pyml_tests_common stdcompat))
 
+(test
+  (name pkg_config_tests)
+  (modules pkg_config_tests)
+  (enabled_if (<> %{os_type} Win32))
+  (libraries pyml unix))
+
 (rule
   (enabled_if (>= %{ocaml_version} 4.06))
   (target pyops.mli)
