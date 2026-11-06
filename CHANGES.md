@@ -12,6 +12,10 @@
   directories otherwise, and a heuristic that fails no longer prevents the
   others from being tried.
 
+- When the Python library is not found, the error of `Py.initialize` gives
+  the outcome of each heuristic (its candidate libraries, or why it
+  failed), as well as the libraries that failed to load.
+
 # 2025-08-07
 
 - Support OCaml only back to 4.11
