@@ -1825,15 +1825,27 @@ pyml_decref(PyObject *op)
      OCaml), or OCaml threads out of [Py.Thread.run_python].
 
    Deadlocks are avoided by acquiring the locks in the order L, G, D: a
-   thread waits for L while holding no lock, and for G while holding no
-   other lock than L. The exceptions are the implicit waits for G when
-   Python code runs while D is held (Python code may release the GIL): the
-   thread that holds G is then a Python thread, which does not wait for the
-   other locks while holding G (the threads that wait for L release G
-   before), or a thread in [STATE_OCAML], which releases G when it blocks.
-   OCaml code that runs in [Py.Thread.run_ocaml] and waits for another
-   thread without blocking (busy waiting) keeps G, which the other thread
-   may need.
+   thread waits for L while holding no lock (a thread that holds G
+   releases it before), and for G while holding no other lock than L. In
+   particular, no thread waits for G while holding D: the stop-the-world
+   sections of the OCaml runtime (the minor collections, for instance) wait
+   for all the domains whose lock is held, and the thread that holds G can
+   start one. A thread can wait for D while holding G.
+
+   This order is broken by Python code that runs while D is held: Python
+   code can release G at any time (when another thread waits for it, or
+   for I/O), and then waits for G while holding D. A thread that holds G
+   can then wait for D (or start a stop-the-world section) while the
+   Python code waits for G: they deadlock. pyml runs the Python functions
+   called with [Py.Thread.call] without D (and without L). The remaining
+   cases are the other Python code that runs with D: the code that the
+   library that uses pyml runs directly (in conversions, or the [__del__]
+   methods of the objects that it releases), and, in [Py.Thread.run_ocaml],
+   the comparison and the hash of Python objects and the Python functions
+   called otherwise than with [Py.Thread.call]. Such code should not
+   release G (it should not wait, nor run for long). OCaml code that runs in [Py.Thread.run_ocaml] and
+   waits for another thread without blocking (busy waiting) keeps G, which
+   the other thread may need.
 
    Python objects cannot be released by the finalizers of the OCaml values
    when the thread does not hold G (the finalizers run in any thread):
@@ -2148,10 +2160,12 @@ pyml_thread_call(value callable_ocaml, value args_ocaml, value kwargs_ocaml)
     PyObject *args = pyml_unwrap(args_ocaml);
     PyObject *kwargs = pyml_unwrap(kwargs_ocaml);
     PyObject *result;
+    /* The objects are kept alive by the OCaml values, which are roots: D
+       (and L) can be released during the call, so that the Python code
+       can wait for threads that call OCaml, and does not wait for G while
+       holding D. */
     if (threads_enabled && thread_state == STATE_ALL) {
-        /* The objects are kept alive by the OCaml values, which are
-           roots. The hook of the blocking section keeps G in
-           [STATE_ALL]. */
+        /* The hook of the blocking section keeps G in [STATE_ALL]. */
         caml_enter_blocking_section();
         thread_state = STATE_PYTHON;
         pthread_mutex_unlock(&world_lock);
@@ -2159,6 +2173,15 @@ pyml_thread_call(value callable_ocaml, value args_ocaml, value kwargs_ocaml)
         lock_world_holding_gil();
         caml_leave_blocking_section();
         thread_state = STATE_ALL;
+    }
+    else if (threads_enabled && thread_state == STATE_OCAML
+             && custom_op_depth == 0) {
+        /* Out of [STATE_OCAML] first, so that the hook keeps G. */
+        thread_state = STATE_PYTHON;
+        caml_enter_blocking_section();
+        result = Python_PyObject_Call(callable, args, kwargs);
+        caml_leave_blocking_section();
+        thread_state = STATE_OCAML;
     }
     else {
         result = Python_PyObject_Call(callable, args, kwargs);

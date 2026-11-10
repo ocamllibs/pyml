@@ -2228,7 +2228,9 @@ end
     thread that runs the OCaml code of the libraries that use pyml (it
     protects their state, which the GIL does not protect), the GIL (or the
     attached thread state of free-threaded builds), and the lock of the
-    OCaml domain. They are taken in this order.
+    OCaml domain. They are taken in this order: no thread waits for the
+    GIL while holding the lock of its domain (the minor collections wait
+    for all the domains whose lock is held).
 
     - The Python threads that call OCaml are registered in the OCaml
       runtime (in the first domain), and take the locks during the call.
@@ -2243,8 +2245,14 @@ end
     - OCaml threads and domains other than the one that called [enable] run
       the code that uses the Python API in [run_python].
     - [call] calls a Python function, and releases the locks of OCaml
-      during the call, so that the Python code can wait for other threads
-      that call OCaml.
+      during the call (in [run_ocaml] too), so that the Python code can
+      wait for other threads that call OCaml.
+    - The Python code called otherwise (by [Callable.to_function], for
+      instance, or by the comparison and the hash of Python objects) runs
+      with the lock of the domain, and should not wait (for I/O, a lock,
+      another thread...) nor run for long: Python can then release the GIL
+      and wait for it while holding the lock of the domain, which another
+      thread that holds the GIL may wait for.
 
     Threads need OCaml >= 5, the OCaml library [threads] (linked in the
     program) and POSIX threads. The Python code called by the comparison or
