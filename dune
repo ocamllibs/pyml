@@ -68,7 +68,14 @@
   (modules threads_tests)
   (enabled_if
     (and (>= %{ocaml_version} 5.0) (<> %{os_type} Win32)))
-  (libraries pyml pyml_tests_common threads.posix))
+  (libraries pyml pyml_tests_common threads.posix unix))
+
+(test
+  (name threads_not_linked_tests)
+  (modules threads_not_linked_tests)
+  (enabled_if
+    (and (>= %{ocaml_version} 5.0) (<> %{os_type} Win32)))
+  (libraries pyml pyml_tests_common))
 
 (rule
   (enabled_if (>= %{ocaml_version} 4.06))
