@@ -3075,6 +3075,44 @@ module Gil = struct
     Fun.protect f ~finally:(fun () -> release t)
 end
 
+module Thread = struct
+  external enable : unit -> unit = "pyml_thread_enable"
+
+  external enabled : unit -> bool = "pyml_thread_enabled"
+
+  external release : unit -> bool = "pyml_thread_release"
+
+  external restore : bool -> unit = "pyml_thread_restore"
+
+  external acquire : unit -> int = "pyml_thread_acquire"
+
+  external unacquire : int -> unit = "pyml_thread_unacquire"
+
+  external call_raw : pyobject -> pyobject -> pyobject -> pyobject
+      = "pyml_thread_call"
+
+  let run_ocaml f =
+    let released = release () in
+    match f () with
+    | result -> restore released; result
+    | exception e ->
+        let bt = Printexc.get_raw_backtrace () in
+        restore released;
+        Printexc.raise_with_backtrace e bt
+
+  let run_python f =
+    let token = acquire () in
+    match f () with
+    | result -> unacquire token; result
+    | exception e ->
+        let bt = Printexc.get_raw_backtrace () in
+        unacquire token;
+        Printexc.raise_with_backtrace e bt
+
+  let call ?(kwargs = null) callable args =
+    check_not_null (call_raw callable args kwargs)
+end
+
 let set_argv argv =
   Module.set (Module.sys ()) "argv" (List.of_array_map String.of_string argv)
 

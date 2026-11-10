@@ -16,6 +16,11 @@
   the outcome of each heuristic (its candidate libraries, or why it
   failed), as well as the libraries that failed to load.
 
+- `Py.Thread`: Python threads, OCaml threads and OCaml domains can call
+  each other (OCaml 5, Unix)
+
+- Support of the free-threaded builds of Python (3.13t and later)
+
 # 2025-08-07
 
 - Support OCaml only back to 4.11

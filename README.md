@@ -289,6 +289,47 @@ ignore (plt.&("plot")[| x; y |]);
 assert (plt.&("show")[| |] = Py.none)
 ```
 
+Threads and domains
+-------------------
+
+With OCaml 5 (on Unix), ``Py.Thread.enable ()``, called after
+``Py.initialize ()`` in a program linked with the library ``threads``,
+lets Python threads call OCaml functions and OCaml threads and domains
+call Python. The free-threaded builds of Python (3.13t and later) are
+supported, and Python threads then run in parallel.
+
+pyml then manages three locks, always taken in this order: a lock of its
+own (pyml calls in OCaml are not reentrant), the GIL (or the thread state
+of the free-threaded builds), and the OCaml domain lock. The thread that
+calls ``Py.Thread.enable ()`` holds them all, and:
+
+- ``Py.Thread.call f args`` calls a Python function and releases the locks
+  of OCaml meanwhile, so that Python threads can call OCaml;
+- ``Py.Thread.run_ocaml f`` runs OCaml code without the lock of pyml, and
+  releases the GIL in the blocking sections of OCaml (``Mutex.lock``,
+  ``Domain.join``, I/O, ...);
+- ``Py.Thread.run_python f`` takes the locks of Python, in any thread or
+  domain.
+
+Python threads are registered in the OCaml runtime the first time they
+call OCaml. Python objects released by the OCaml GC in a thread without
+the GIL are released later, by the next thread that takes the GIL.
+
+```ocaml
+let sum = Py.Module.get_function (Py.import "builtins") "sum" in
+let work i () =
+  Py.Thread.run_python (fun () ->
+    Py.Int.to_int (sum [| Py.List.of_list_map Py.Int.of_int [i; 1] |])) in
+let results = Py.Thread.run_ocaml (fun () ->
+  List.init 4 (fun i -> Domain.spawn (work i)) |> List.map Domain.join) in
+assert (results = [1; 2; 3; 4])
+```
+
+Python code called by ``compare`` or ``Hashtbl.hash`` on Python objects
+cannot call OCaml back (it raises ``RuntimeError``): these functions run
+with all the locks held, since the values that they compare are not
+registered with the GC.
+
 NumPy
 -----
 

@@ -13,7 +13,43 @@
 #include <errno.h>
 #include <caml/alloc.h>
 #include <assert.h>
+#include <caml/version.h>
+#include <caml/signals.h>
 #include "pyml_stubs.h"
+
+/* Threads (see the module [Py.Thread]) are supported with OCaml 5 on the
+   systems with POSIX threads and weak symbols: the functions of the OCaml
+   library threads are only called if the program links it. */
+#if OCAML_VERSION_MAJOR >= 5 && !defined(_WIN32) && defined(__GNUC__)
+#define PYML_THREADS
+#include <pthread.h>
+extern int caml_c_thread_register(void) __attribute__((weak));
+extern int caml_c_thread_unregister(void) __attribute__((weak));
+/* Exported by the runtime, declared in <caml/signals.h> with
+   [CAML_INTERNALS] only. */
+extern void (*caml_enter_blocking_section_hook)(void);
+extern void (*caml_leave_blocking_section_hook)(void);
+#endif
+
+/* Free-threaded builds of Python (3.13t and later, [Py_GIL_DISABLED]) have
+   another object header: the thread id, flags, the local reference count
+   (32 bits) and the shared reference count come before [ob_type]. */
+static bool free_threaded_build = false;
+
+#define FREE_THREADED_HEADER_OFFSET (sizeof(uintptr_t) + 8)
+
+static void (*Python_Py_IncRef)(PyObject *);
+static void (*Python_Py_DecRef)(PyObject *);
+static void *(*Python_PyEval_SaveThread)(void);
+static void (*Python_PyEval_RestoreThread)(void *);
+static int (*Python_PyGILState_Ensure_)(void);
+static void (*Python_PyGILState_Release_)(int);
+static void (*Python_PyErr_SetString_)(PyObject *, const char *);
+static PyObject **Python_PyExc_RuntimeError_;
+
+static bool pyml_threads_can_decref(void);
+static void pyml_threads_check_locked(void);
+static void pyml_threads_custom_op(bool begin);
 
 static FILE *(*Python__Py_fopen)(const char *pathname, const char *mode);
 
@@ -213,7 +249,9 @@ static void *getcustom( value v )
    when the minor GC holds the lock of the global roots). The finalizer
    pushes the object to [pending_decrefs] instead, and the list is drained
    by [pyml_drain_decrefs] when pyml wraps a new object (the garbage is
-   produced at the pace of the allocations) and when pyml is finalized.
+   produced at the pace of the allocations), when pyml is finalized, and,
+   with [Py.Thread.enable], when a thread takes the GIL (the finalizers of
+   the threads that do not hold the GIL defer their decrefs too).
 
    The OCaml 5 domains can run finalizers in parallel: the list is
    lock-free. The whole list is taken at once, so there is no ABA
@@ -291,12 +329,13 @@ static void pydecref( value v )
     }
 }
 
-/* Called with the GIL, where OCaml code can run. The decrefs can run
+/* Called where OCaml code can run. The decrefs need the GIL: they are left
+   in the list when the thread does not hold it. The decrefs can run
    finalizers that push other objects: the loop drains them too. */
 static void
 pyml_drain_decrefs(void)
 {
-    if (pending_decrefs_load() == NULL) {
+    if (pending_decrefs_load() == NULL || !pyml_threads_can_decref()) {
         return;
     }
     PyObject *type, *exc, *traceback;
@@ -331,6 +370,7 @@ static int
 pycompare(value v1, value v2)
 {
     int result;
+    pyml_threads_custom_op(true);
     PyObject *o1 = getcustom(v1);
     PyObject *o2 = getcustom(v2);
 
@@ -351,22 +391,23 @@ pycompare(value v1, value v2)
     else
         result = -1;
 
+    pyml_threads_custom_op(false);
     return result;
 }
 
 static intnat
 pyhash( value v )
 {
+    intnat result = 0;
+    pyml_threads_custom_op(true);
     if (getcustom(v)) {
-        intnat result = Python_PyObject_Hash((PyObject *)getcustom(v));
+        result = Python_PyObject_Hash((PyObject *)getcustom(v));
         if (result == -1) {
             Python_PyErr_Clear();
         }
-        return result;
     }
-    else {
-        return 0;
-    }
+    pyml_threads_custom_op(false);
+    return result;
 }
 
 void
@@ -375,6 +416,7 @@ pyml_assert_initialized()
     if (!version_major) {
         caml_failwith("Run 'Py.initialize ()' first");
     }
+    pyml_threads_check_locked();
 }
 
 /** Creates a Python tuple initialized with a single element given by the
@@ -639,7 +681,7 @@ wrap_capsule(void *ptr, char *type, void (*destr)(PyObject *))
 }
 
 static PyObject *
-pycall_callback(PyObject *obj, PyObject *args)
+pycall_callback_locked(PyObject *obj, PyObject *args)
 {
     CAMLparam0();
     CAMLlocal3(ml_out, ml_func, ml_args);
@@ -658,7 +700,8 @@ pycall_callback(PyObject *obj, PyObject *args)
 }
 
 static PyObject *
-pycall_callback_with_keywords(PyObject *obj, PyObject *args, PyObject *keywords)
+pycall_callback_with_keywords_locked(
+    PyObject *obj, PyObject *args, PyObject *keywords)
 {
     CAMLparam0();
     CAMLlocal4(ml_out, ml_func, ml_args, ml_keywords);
@@ -675,6 +718,37 @@ pycall_callback_with_keywords(PyObject *obj, PyObject *args, PyObject *keywords)
     out = pyml_unwrap(ml_out);
     Py_XINCREF(out);
     CAMLreturnT(PyObject *, out);
+}
+
+static bool pyml_threads_enter_from_python(int *previous);
+
+static void pyml_threads_leave_to_python(int previous);
+
+/* Python calls OCaml: with [Py.Thread.enable], the thread takes the locks
+   that OCaml code needs (see [pyml_threads_enter_from_python]). */
+static PyObject *
+pycall_callback(PyObject *obj, PyObject *args)
+{
+    int previous;
+    if (!pyml_threads_enter_from_python(&previous)) {
+        return NULL;
+    }
+    PyObject *result = pycall_callback_locked(obj, args);
+    pyml_threads_leave_to_python(previous);
+    return result;
+}
+
+static PyObject *
+pycall_callback_with_keywords(PyObject *obj, PyObject *args, PyObject *keywords)
+{
+    int previous;
+    if (!pyml_threads_enter_from_python(&previous)) {
+        return NULL;
+    }
+    PyObject *result =
+        pycall_callback_with_keywords_locked(obj, args, keywords);
+    pyml_threads_leave_to_python(previous);
+    return result;
 }
 
 static void
@@ -924,6 +998,17 @@ py_load_library(value filename_ocaml, value debug_build_ocaml)
     Python_PyLong_FromString = resolve("PyLong_FromString");
     Python_PyMem_Free = resolve("PyMem_Free");
     Python_PyThreadState_Get = resolve("PyThreadState_Get");
+    Python_Py_IncRef = resolve("Py_IncRef");
+    Python_Py_DecRef = resolve("Py_DecRef");
+    Python_PyEval_SaveThread = resolve("PyEval_SaveThread");
+    Python_PyEval_RestoreThread = resolve("PyEval_RestoreThread");
+    Python_PyGILState_Ensure_ = resolve("PyGILState_Ensure");
+    Python_PyGILState_Release_ = resolve("PyGILState_Release");
+    Python_PyErr_SetString_ = resolve("PyErr_SetString");
+    Python_PyExc_RuntimeError_ = resolve("PyExc_RuntimeError");
+    /* This function only exists in free-threaded builds. */
+    free_threaded_build =
+        resolve_optional("_Py_MergeZeroLocalRefcount") != NULL;
     Python_PyFrame_New = resolve("PyFrame_New");
     Python_PyCode_NewEmpty = resolve("PyCode_NewEmpty");
     if (version_major >= 3) {
@@ -968,6 +1053,11 @@ struct PyObjectDebug {
 };
 
 PyObjectDescr *pyobjectdescr(PyObject *obj) {
+    if (free_threaded_build) {
+        /* [ob_refcnt] is then the shared reference count, which is only
+           read by [pyrefcount]. */
+        return (PyObjectDescr *) ((char *) obj + FREE_THREADED_HEADER_OFFSET);
+    }
     if (trace_refs_build) {
         return &((struct PyObjectDebug *) obj)->descr;
     }
@@ -1377,6 +1467,18 @@ pyrefcount(value pyobj)
 {
     CAMLparam1(pyobj);
     PyObject *obj = pyml_unwrap(pyobj);
+    if (free_threaded_build) {
+        /* The local count is followed by the shared count, shifted by 2
+           bits ([_Py_REF_SHARED_SHIFT]); the immortal objects have the
+           maximal local count. */
+        uint32_t local =
+            *(uint32_t *) ((char *) obj + sizeof(uintptr_t) + 4);
+        if (local == UINT32_MAX) {
+            CAMLreturn(Val_long(Max_long));
+        }
+        Py_ssize_t shared = pyobjectdescr(obj)->ob_refcnt;
+        CAMLreturn(Val_long(local + (shared >> 2)));
+    }
     CAMLreturn(Val_int(pyobjectdescr(obj)->ob_refcnt));
 }
 
@@ -1663,3 +1765,485 @@ pyml_pyframe_new(value filename_ocaml, value funcname_ocaml, value lineno_ocaml)
 }
 
 #include "pyml_wrappers.inc"
+
+void
+pyml_incref(PyObject *op)
+{
+    if (free_threaded_build) {
+        Python_Py_IncRef(op);
+    }
+    else {
+        pyobjectdescr(op)->ob_refcnt++;
+    }
+}
+
+void
+pyml_decref(PyObject *op)
+{
+    if (free_threaded_build) {
+        Python_Py_DecRef(op);
+    }
+    else {
+        PyObjectDescr *descr = pyobjectdescr(op);
+        if (--descr->ob_refcnt == 0) {
+            ((struct _typeobject *) pyobjectdescr(descr->ob_type))
+                ->tp_dealloc(op);
+        }
+    }
+}
+
+/* Threads.
+
+   Once [Py.Thread.enable ()] is called, OCaml and Python code can run in
+   several threads (and OCaml domains), and three locks are involved:
+
+   - the world lock [world_lock] (L), held by the thread that runs the
+     OCaml code of the libraries that use pyml (the code that converts
+     values, for instance): it protects their state, which the GIL does not
+     protect (Python code can release the GIL at any time, and there is no
+     GIL in free-threaded builds);
+   - the GIL (G), or the attached thread state of free-threaded builds;
+   - the lock of the OCaml domain of the thread (D).
+
+   Each thread is in one of the states:
+
+   - [STATE_ALL]: the thread holds L, G and D;
+   - [STATE_OCAML]: the thread runs OCaml code in [Py.Thread.run_ocaml],
+     and holds G and D: the OCaml code can use the Python API (and compare
+     or hash Python objects), but other threads can run the OCaml code of
+     the libraries. G is released during the blocking sections of OCaml
+     (waiting for a mutex, a domain, I/O...), with the hooks
+     [caml_enter_blocking_section_hook] and
+     [caml_leave_blocking_section_hook] ([STATE_OCAML_BLOCKED]), and taken
+     again before D when the blocking section ends;
+   - [STATE_PYTHON]: the thread runs Python code and only holds G (a
+     Python thread, or [Py.Thread.call]);
+   - [STATE_UNKNOWN]: the threads that pyml has not seen yet (OCaml
+     threads and domains, and Python threads before their first call to
+     OCaml), or OCaml threads out of [Py.Thread.run_python].
+
+   Deadlocks are avoided by acquiring the locks in the order L, G, D: a
+   thread waits for L while holding no lock, and for G while holding no
+   other lock than L. The exceptions are the implicit waits for G when
+   Python code runs while D is held (Python code may release the GIL): the
+   thread that holds G is then a Python thread, which does not wait for the
+   other locks while holding G (the threads that wait for L release G
+   before), or a thread in [STATE_OCAML], which releases G when it blocks.
+   OCaml code that runs in [Py.Thread.run_ocaml] and waits for another
+   thread without blocking (busy waiting) keeps G, which the other thread
+   may need.
+
+   Python objects cannot be released by the finalizers of the OCaml values
+   when the thread does not hold G (the finalizers run in any thread):
+   they are then queued, and released by the next thread that takes the
+   locks. */
+
+enum pyml_thread_state {
+    STATE_UNKNOWN,
+    STATE_ALL,
+    STATE_OCAML,
+    STATE_OCAML_BLOCKED,
+    STATE_PYTHON
+};
+
+#ifdef PYML_THREADS
+
+static bool threads_enabled = false;
+
+static pthread_mutex_t world_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static __thread enum pyml_thread_state thread_state = STATE_UNKNOWN;
+
+/* The Python thread state released in a blocking section of
+   [STATE_OCAML]. */
+static __thread void *blocked_thread_state = NULL;
+
+/* Positive during the comparison and the hash of Python objects, where D
+   cannot be released (the values compared are not roots). */
+static __thread int custom_op_depth = 0;
+
+/* The threads that pyml registers in the OCaml runtime are unregistered
+   when they exit, by the destructor of this key. */
+static pthread_key_t registered_key;
+
+static void (*previous_enter_hook)(void);
+
+static void (*previous_leave_hook)(void);
+
+static bool
+holds_gil(void)
+{
+    return thread_state == STATE_ALL || thread_state == STATE_OCAML;
+}
+
+static bool
+pyml_threads_can_decref(void)
+{
+    return !threads_enabled || holds_gil();
+}
+
+static void
+enter_blocking_section_hook(void)
+{
+    if (thread_state == STATE_OCAML) {
+        blocked_thread_state = Python_PyEval_SaveThread();
+        thread_state = STATE_OCAML_BLOCKED;
+    }
+    previous_enter_hook();
+}
+
+static void
+leave_blocking_section_hook(void)
+{
+    if (thread_state == STATE_OCAML_BLOCKED) {
+        void *tstate = blocked_thread_state;
+        blocked_thread_state = NULL;
+        Python_PyEval_RestoreThread(tstate);
+        thread_state = STATE_OCAML;
+    }
+    previous_leave_hook();
+}
+
+/* Takes L while holding G (and not D): G is released while waiting. */
+static void
+lock_world_holding_gil(void)
+{
+    if (pthread_mutex_trylock(&world_lock) != 0) {
+        void *tstate = Python_PyEval_SaveThread();
+        pthread_mutex_lock(&world_lock);
+        Python_PyEval_RestoreThread(tstate);
+    }
+}
+
+/* From [STATE_OCAML] (G, D) to [STATE_ALL]: G and D are released while
+   waiting for L (by the hook of the blocking section). */
+static void
+lock_world_from_ocaml(void)
+{
+    if (pthread_mutex_trylock(&world_lock) != 0) {
+        caml_enter_blocking_section();
+        pthread_mutex_lock(&world_lock);
+        caml_leave_blocking_section();
+    }
+    thread_state = STATE_ALL;
+}
+
+static void
+unregister_thread(void *unused)
+{
+    (void) unused;
+    caml_c_thread_unregister();
+}
+
+static void
+set_runtime_error(const char *msg)
+{
+    Python_PyErr_SetString_(*Python_PyExc_RuntimeError_, msg);
+}
+
+/* Python calls OCaml: to [STATE_ALL]. */
+static bool
+pyml_threads_enter_from_python(int *previous)
+{
+    *previous = -1;
+    if (!threads_enabled || thread_state == STATE_ALL) {
+        return true;
+    }
+    if (thread_state == STATE_OCAML) {
+        /* Python code run by OCaml code in [Py.Thread.run_ocaml]. */
+        if (custom_op_depth > 0) {
+            set_runtime_error(
+                "OCaml cannot be called by the comparison or the hash of "
+                "Python objects in OCaml");
+            return false;
+        }
+        *previous = STATE_OCAML;
+        lock_world_from_ocaml();
+        pyml_drain_decrefs();
+        return true;
+    }
+    if (thread_state == STATE_UNKNOWN) {
+        /* A Python thread that pyml has not seen (the OCaml threads and
+           domains are in other states when Python calls OCaml, since they
+           call Python in [run_python]): it is registered in the OCaml
+           runtime ([Caml_state_opt] cannot tell, since it is [NULL] when
+           the thread does not hold D). The registration takes D: G is
+           released before. */
+        void *tstate = Python_PyEval_SaveThread();
+        int registered = caml_c_thread_register();
+        Python_PyEval_RestoreThread(tstate);
+        if (!registered) {
+            set_runtime_error("cannot register the thread in OCaml");
+            return false;
+        }
+        pthread_setspecific(registered_key, (void *) 1);
+    }
+    *previous = thread_state;
+    lock_world_holding_gil();
+    caml_leave_blocking_section();
+    thread_state = STATE_ALL;
+    pyml_drain_decrefs();
+    return true;
+}
+
+/* Back to the state before [pyml_threads_enter_from_python]. */
+static void
+pyml_threads_leave_to_python(int previous)
+{
+    if (previous < 0) {
+        return;
+    }
+    if (previous == STATE_OCAML) {
+        thread_state = STATE_OCAML;
+        pthread_mutex_unlock(&world_lock);
+        return;
+    }
+    caml_enter_blocking_section();
+    thread_state = previous == STATE_UNKNOWN ? STATE_PYTHON : previous;
+    pthread_mutex_unlock(&world_lock);
+}
+
+/* The Python API needs G. */
+static void
+pyml_threads_check_locked(void)
+{
+    if (!threads_enabled || holds_gil()) {
+        return;
+    }
+    caml_failwith(
+        "Py: the Python API is used by an OCaml thread that does not hold "
+        "the Python lock (see Py.Thread.run_python)");
+}
+
+static void
+pyml_threads_custom_op(bool begin)
+{
+    if (!threads_enabled) {
+        return;
+    }
+    if (begin) {
+        if (!holds_gil()) {
+            caml_failwith(
+                "Py: Python objects are compared or hashed by an OCaml "
+                "thread that does not hold the Python lock (see "
+                "Py.Thread.run_python)");
+        }
+        custom_op_depth++;
+    }
+    else {
+        custom_op_depth--;
+    }
+}
+
+CAMLprim value
+pyml_thread_enable(value unit)
+{
+    CAMLparam1(unit);
+    pyml_assert_initialized();
+    if (threads_enabled) {
+        CAMLreturn(Val_unit);
+    }
+    if (!caml_c_thread_register || !caml_c_thread_unregister) {
+        caml_failwith(
+            "Py.Thread.enable: the OCaml library threads is not linked");
+    }
+    if (pthread_key_create(&registered_key, unregister_thread) != 0) {
+        caml_failwith("Py.Thread.enable: pthread_key_create");
+    }
+    /* The hooks of the library threads (which release D) are installed
+       when the library is initialized. */
+    previous_enter_hook = caml_enter_blocking_section_hook;
+    previous_leave_hook = caml_leave_blocking_section_hook;
+    caml_enter_blocking_section_hook = enter_blocking_section_hook;
+    caml_leave_blocking_section_hook = leave_blocking_section_hook;
+    pthread_mutex_lock(&world_lock);
+    thread_state = STATE_ALL;
+    threads_enabled = true;
+    CAMLreturn(Val_unit);
+}
+
+/* Called from C, by a program that started OCaml from Python (as with
+   ctypes) and returns to Python after [Py.Thread.enable]: releases L and
+   D, and keeps G. */
+void
+pyml_thread_leave(void)
+{
+    if (threads_enabled && thread_state == STATE_ALL) {
+        pyml_threads_leave_to_python(STATE_PYTHON);
+    }
+}
+
+CAMLprim value
+pyml_thread_enabled(value unit)
+{
+    return Val_bool(threads_enabled);
+}
+
+CAMLprim value
+pyml_thread_release(value unit)
+{
+    if (!threads_enabled || thread_state != STATE_ALL) {
+        return Val_false;
+    }
+    thread_state = STATE_OCAML;
+    pthread_mutex_unlock(&world_lock);
+    return Val_true;
+}
+
+CAMLprim value
+pyml_thread_restore(value released)
+{
+    if (Bool_val(released)) {
+        lock_world_from_ocaml();
+        pyml_drain_decrefs();
+    }
+    return Val_unit;
+}
+
+CAMLprim value
+pyml_thread_acquire(value unit)
+{
+    if (!threads_enabled || thread_state == STATE_ALL) {
+        return Val_int(-1);
+    }
+    if (thread_state == STATE_OCAML) {
+        lock_world_from_ocaml();
+        pyml_drain_decrefs();
+        return Val_int(-2);
+    }
+    int previous = thread_state;
+    caml_enter_blocking_section();
+    pthread_mutex_lock(&world_lock);
+    int gstate = Python_PyGILState_Ensure_();
+    caml_leave_blocking_section();
+    thread_state = STATE_ALL;
+    pyml_drain_decrefs();
+    return Val_int(gstate * 8 + previous);
+}
+
+CAMLprim value
+pyml_thread_unacquire(value token)
+{
+    int t = Int_val(token);
+    if (t == -2) {
+        thread_state = STATE_OCAML;
+        pthread_mutex_unlock(&world_lock);
+    }
+    else if (t >= 0) {
+        Python_PyGILState_Release_(t / 8);
+        thread_state = t % 8;
+        pthread_mutex_unlock(&world_lock);
+    }
+    return Val_unit;
+}
+
+CAMLprim value
+pyml_thread_call(value callable_ocaml, value args_ocaml, value kwargs_ocaml)
+{
+    CAMLparam3(callable_ocaml, args_ocaml, kwargs_ocaml);
+    pyml_assert_initialized();
+    PyObject *callable = pyml_unwrap(callable_ocaml);
+    PyObject *args = pyml_unwrap(args_ocaml);
+    PyObject *kwargs = pyml_unwrap(kwargs_ocaml);
+    PyObject *result;
+    if (threads_enabled && thread_state == STATE_ALL) {
+        /* The objects are kept alive by the OCaml values, which are
+           roots. The hook of the blocking section keeps G in
+           [STATE_ALL]. */
+        caml_enter_blocking_section();
+        thread_state = STATE_PYTHON;
+        pthread_mutex_unlock(&world_lock);
+        result = Python_PyObject_Call(callable, args, kwargs);
+        lock_world_holding_gil();
+        caml_leave_blocking_section();
+        thread_state = STATE_ALL;
+    }
+    else {
+        result = Python_PyObject_Call(callable, args, kwargs);
+    }
+    CAMLreturn(pyml_wrap(result, true));
+}
+
+#else /* !PYML_THREADS */
+
+static bool
+pyml_threads_can_decref(void)
+{
+    return true;
+}
+
+static bool
+pyml_threads_enter_from_python(int *previous)
+{
+    *previous = -1;
+    return true;
+}
+
+static void
+pyml_threads_leave_to_python(int previous)
+{
+}
+
+static void
+pyml_threads_check_locked(void)
+{
+}
+
+static void
+pyml_threads_custom_op(bool begin)
+{
+}
+
+CAMLprim value
+pyml_thread_enable(value unit)
+{
+    caml_failwith("Py.Thread.enable: threads are not supported");
+}
+
+void
+pyml_thread_leave(void)
+{
+}
+
+CAMLprim value
+pyml_thread_enabled(value unit)
+{
+    return Val_false;
+}
+
+CAMLprim value
+pyml_thread_release(value unit)
+{
+    return Val_false;
+}
+
+CAMLprim value
+pyml_thread_restore(value released)
+{
+    return Val_unit;
+}
+
+CAMLprim value
+pyml_thread_acquire(value unit)
+{
+    return Val_int(-1);
+}
+
+CAMLprim value
+pyml_thread_unacquire(value token)
+{
+    return Val_unit;
+}
+
+CAMLprim value
+pyml_thread_call(value callable_ocaml, value args_ocaml, value kwargs_ocaml)
+{
+    CAMLparam3(callable_ocaml, args_ocaml, kwargs_ocaml);
+    pyml_assert_initialized();
+    PyObject *result = Python_PyObject_Call(
+        pyml_unwrap(callable_ocaml), pyml_unwrap(args_ocaml),
+        pyml_unwrap(kwargs_ocaml));
+    CAMLreturn(pyml_wrap(result, true));
+}
+
+#endif

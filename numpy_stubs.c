@@ -127,7 +127,10 @@ bigarray_of_pyarray_wrapper(
     for (i = 0; i < nd; i++) {
         dims[i] = shape[i];
     }
-    int type = fields->descr->type_num;
+    /* The header of the descriptor depends on the build of Python (see
+       [pyobjectdescr]). */
+    int type = ((PyArray_Descr *) pyobjectdescr(
+        (PyObject *) fields->descr))->type_num;
     enum caml_ba_kind kind;
     switch (type) {
     case NPY_BYTE:
