@@ -2,8 +2,23 @@
   (public_name pyml)
   (modules numpy py pyops pycaml pyml_arch pytypes pywrappers pyutils)
   (foreign_stubs (language c) (names numpy_stubs pyml_stubs))
+  (c_library_flags (:include c_library_flags.sexp))
   (wrapped false)
   (libraries unix bigarray stdcompat))
+
+;; The functions of the library threads are weak symbols in pyml_stubs.c,
+;; resolved only if the program links threads: the linker of macOS needs
+;; -U to accept them undefined.
+(rule
+  (target c_library_flags.sexp)
+  (enabled_if (= %{ocaml-config:system} macosx))
+  (action (write-file %{target}
+    "(-Wl,-U,_caml_c_thread_register -Wl,-U,_caml_c_thread_unregister)")))
+
+(rule
+  (target c_library_flags.sexp)
+  (enabled_if (<> %{ocaml-config:system} macosx))
+  (action (write-file %{target} "()")))
 
 (executables
   (names generate)
