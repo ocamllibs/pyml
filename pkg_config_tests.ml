@@ -42,7 +42,8 @@ let test_not_found () =
         if not (contains msg sub) then
           failwith (Printf.sprintf "%S not in the error: %s" sub msg))
         ["Py.find_library: unable to find the Python library";
-         "heuristics: interpreter: no candidate; ldconfig: no candidate; ";
+         "heuristics: interpreter: no candidate; sysconfig: no candidate; ";
+         "ldconfig: no candidate; ";
          "pkg-config: libpython3.99m.";
          "/nonexistent/libpython3.99.";
          "PYTHONHOME: libpython3.99m.";

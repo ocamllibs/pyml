@@ -363,6 +363,33 @@ print(sys.path)
       end
   | _ -> []
 
+(* The library of the interpreter, as its build configuration gives it: the
+   only heuristic that finds the library of the free-threaded builds
+   ([libpython3.14t.so]) when the interpreter is linked statically (the
+   builds of python-build-standalone, installed by uv), and that does not
+   find the library of another build of the same version. *)
+let libpython_from_sysconfig python_full_path =
+  let command = "\
+import sysconfig
+for name in ('LDLIBRARY', 'INSTSONAME'):
+    print(sysconfig.get_config_var('LIBDIR') or '')
+    print(sysconfig.get_config_var(name) or '')
+" in
+  let lines =
+    try run_command ~input:command python_full_path false
+    with Failure _ -> [] in
+  let rec candidates lines =
+    match lines with
+    | libdir :: library :: tail ->
+        let tail = candidates tail in
+        if libdir = "" || library = ""
+            || Filename.check_suffix library ".a" then
+          tail
+        else
+          Filename.concat libdir library :: tail
+    | _ -> [] in
+  List.sort_uniq compare (candidates lines)
+
 let concat_library_filenames library_paths library_filenames =
   let expand_filepaths filename =
     filename ::
@@ -380,10 +407,12 @@ let library_patterns : (int -> int -> string) list =
       [Printf.sprintf "python%d%dm.dll"; Printf.sprintf "python%d%d.dll"]
   | Pyml_arch.Mac ->
       [Printf.sprintf "libpython%d.%dm.dylib";
-        Printf.sprintf "libpython%d.%d.dylib"]
+        Printf.sprintf "libpython%d.%d.dylib";
+        Printf.sprintf "libpython%d.%dt.dylib"]
   | Pyml_arch.Unix ->
       [Printf.sprintf "libpython%d.%dm.so";
-        Printf.sprintf "libpython%d.%d.so"]
+        Printf.sprintf "libpython%d.%d.so";
+        Printf.sprintf "libpython%d.%dt.so"]
 
 let library_filenames_from_paths version_major version_minor paths =
   let library_filenames =
@@ -512,6 +541,9 @@ let find_library_path version_major version_minor python_full_path
     (fun () ->
       Option.bind python_full_path (fun path ->
         Option.map (fun path -> [path]) (libpython_from_interpreter path)));
+    "sysconfig",
+    (fun () ->
+      Option.map libpython_from_sysconfig python_full_path);
     "ldconfig",
     (fun () ->
       Option.map (fun path -> [path])

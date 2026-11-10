@@ -21,6 +21,12 @@
 
 - Support of the free-threaded builds of Python (3.13t and later)
 
+- The Python library is also looked for with the build configuration of
+  the interpreter (`sysconfig`: `LIBDIR` and `LDLIBRARY`), which finds the
+  library of the free-threaded builds (`libpython3.14t.so`) and of the
+  interpreters linked statically (python-build-standalone, uv), and with
+  the names of the free-threaded builds in the other directories.
+
 # 2025-08-07
 
 - Support OCaml only back to 4.11
