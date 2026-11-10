@@ -23,8 +23,10 @@
 #if OCAML_VERSION_MAJOR >= 5 && !defined(_WIN32) && defined(__GNUC__)
 #define PYML_THREADS
 #include <pthread.h>
-extern int caml_c_thread_register(void) __attribute__((weak));
-extern int caml_c_thread_unregister(void) __attribute__((weak));
+#include <caml/threads.h>
+/* Weak references: NULL if the program does not link threads. */
+CAMLextern int caml_c_thread_register(void) __attribute__((weak));
+CAMLextern int caml_c_thread_unregister(void) __attribute__((weak));
 /* Exported by the runtime, declared in <caml/signals.h> with
    [CAML_INTERNALS] only. */
 extern void (*caml_enter_blocking_section_hook)(void);
