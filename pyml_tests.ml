@@ -791,5 +791,47 @@ let () =
          Pyml_tests_common.Passed)
 
 let () =
+  Pyml_tests_common.add_test
+    ~title:"finalizers do not call Python"
+    (fun () ->
+      (* The OCaml GC runs the finalizers of Python objects in the middle
+         of collections. With OCaml 5, the finalizer of a dropped capsule
+         removed its global root while the minor GC promoted the young
+         global roots, and deadlocked on the lock of the global roots. *)
+      let wrap, _unwrap = Py.Capsule.make "finalizers do not call Python" in
+      let ring = Array.make 1000 Py.none in
+      let gc = Gc.get () in
+      Gc.set { gc with minor_heap_size = 4096 };
+      Fun.protect ~finally:(fun () -> Gc.set gc) @@ fun () ->
+      for i = 1 to 2_000_000 do
+        (* The ring keeps the capsules long enough to be promoted, so that
+           they die in the major heap. The young pair, of the size of their
+           custom blocks, is promoted from the global roots and its
+           allocation sweeps their pool. *)
+        ring.(i mod Array.length ring) <- wrap (Sys.opaque_identity (i, i))
+      done;
+      Pyml_tests_common.Passed
+    )
+
+let () =
+  Pyml_tests_common.add_test
+    ~title:"collected objects are released"
+    (fun () ->
+      let weakref = Py.Import.import_module "weakref" in
+      let make_ref () =
+        let obj = Py.Run.eval "type('C', (), {})()" in
+        Py.Module.get_function weakref "ref" [| obj |] in
+      let weak = make_ref () in
+      Gc.full_major ();
+      (* The finalizers defer the decrefs: they are done when pyml wraps
+         the next object. *)
+      ignore (Sys.opaque_identity (Py.String.of_string "next object"));
+      if Py.is_none (Py.Callable.to_function weak [| |]) then
+        Pyml_tests_common.Passed
+      else
+        Pyml_tests_common.Failed "the object is not released"
+    )
+
+let () =
   if not !Sys.interactive then
     Pyml_tests_common.main ()

@@ -289,6 +289,58 @@ ignore (plt.&("plot")[| x; y |]);
 assert (plt.&("show")[| |] = Py.none)
 ```
 
+Threads and domains
+-------------------
+
+With OCaml 5 (on Unix), ``Py.Thread.enable ()``, called after
+``Py.initialize ()`` in a program linked with the library ``threads``,
+lets Python threads call OCaml functions and OCaml threads and domains
+call Python. The free-threaded builds of Python (3.13t and later) are
+supported, and Python threads then run in parallel.
+
+pyml then manages three locks, always taken in this order: a lock of its
+own (pyml calls in OCaml are not reentrant), the GIL (or the thread state
+of the free-threaded builds), and the OCaml domain lock. No thread waits
+for the GIL while it holds the domain lock (the minor collections wait for
+all the domains whose lock is held). The thread that calls
+``Py.Thread.enable ()`` holds them all, and:
+
+- ``Py.Thread.call f args`` calls a Python function and releases the locks
+  of OCaml meanwhile, so that the Python code can wait for Python threads
+  that call OCaml;
+- ``Py.Thread.run_ocaml f`` runs OCaml code without the lock of pyml, and
+  releases the GIL in the blocking sections of OCaml (``Mutex.lock``,
+  ``Domain.join``, I/O, ...);
+- ``Py.Thread.run_python f`` takes the locks of Python, in any thread or
+  domain.
+
+Python threads are registered in the OCaml runtime the first time they
+call OCaml, in the first domain: the OCaml code that they call runs in one
+thread at a time (unless it blocks), and in parallel with the other
+domains. Python objects released by the OCaml GC in a thread without
+the GIL are released later, by the next thread that takes the GIL.
+
+```ocaml
+let sum = Py.Module.get_function (Py.import "builtins") "sum" in
+let work i () =
+  Py.Thread.run_python (fun () ->
+    Py.Int.to_int (sum [| Py.List.of_list_map Py.Int.of_int [i; 1] |])) in
+let results = Py.Thread.run_ocaml (fun () ->
+  List.init 4 (fun i -> Domain.spawn (work i)) |> List.map Domain.join) in
+assert (results = [1; 2; 3; 4])
+```
+
+Python code that runs while the domain lock is held should not wait (for
+I/O, a lock, another thread...) nor run for long: Python can then release
+the GIL and wait for it with the domain lock, while another thread that
+holds the GIL waits for the domain lock. It is the Python code called by
+the other functions of pyml than ``Py.Thread.call`` (as
+``Py.Callable.to_function``), and by ``compare`` or ``Hashtbl.hash`` on
+Python objects. The latter cannot release the domain lock, since the
+values that they compare are not registered with the GC: their Python
+code cannot call OCaml back in ``Py.Thread.run_ocaml`` (it raises
+``RuntimeError``).
+
 NumPy
 -----
 

@@ -168,26 +168,24 @@ typedef Py_intptr_t npy_intp;
 void **
 pyml_get_pyarray_api(PyObject *c_api);
 
-#define Py_INCREF(op)                                            \
-    ((pyobjectdescr(op))->ob_refcnt++)
+/* The reference counts are changed by functions that take the layout of
+   the objects into account: free-threaded builds of Python (3.13 and later)
+   have another header, whose counts are only changed by the functions
+   [Py_IncRef] and [Py_DecRef]. */
+void pyml_incref(PyObject *op);
+
+void pyml_decref(PyObject *op);
+
+#define Py_INCREF(op) pyml_incref((PyObject *)(op))
 
 #define Py_XINCREF(op)                                           \
     do {                                                         \
-        PyObjectDescr *_py_xincref_tmp =                         \
-            pyobjectdescr((PyObject *)(op));                     \
+        PyObject *_py_xincref_tmp = (PyObject *)(op);            \
         if (_py_xincref_tmp != NULL)                             \
-            Py_INCREF(_py_xincref_tmp);                          \
+            pyml_incref(_py_xincref_tmp);                        \
     } while (0)
 
-#define Py_DECREF(op)                                            \
-    do {                                                         \
-        PyObjectDescr *_py_decref_tmp =                          \
-            pyobjectdescr((PyObject *)(op));                     \
-        if (--(_py_decref_tmp)->ob_refcnt == 0)                  \
-            ((struct _typeobject *)                              \
-             pyobjectdescr(_py_decref_tmp->ob_type))             \
-                ->tp_dealloc(op);                                \
-    } while (0)
+#define Py_DECREF(op) pyml_decref((PyObject *)(op))
 
 /* from ndarraytypes.h */
 

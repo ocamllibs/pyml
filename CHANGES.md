@@ -1,5 +1,32 @@
 [*] marks changes that break compatibility with previous versions.
 
+# Next version
+
+- Fix `Py.initialize` when `pkg-config` gives no `-l` flag for the Python
+  library, as with the framework builds of Python on macOS (Homebrew),
+  whose `pkg-config --libs python-3.13` only gives a `-L` flag: the error
+  "Py.find_library_path: unable to parse the output of pkg-config"
+  prevented the other heuristics from finding the library. `pkg-config` is
+  now asked for `python-X.Y-embed` first (which has the `-l` flag since
+  Python 3.8), the usual names of the library are looked for in the `-L`
+  directories otherwise, and a heuristic that fails no longer prevents the
+  others from being tried.
+
+- When the Python library is not found, the error of `Py.initialize` gives
+  the outcome of each heuristic (its candidate libraries, or why it
+  failed), as well as the libraries that failed to load.
+
+- `Py.Thread`: Python threads, OCaml threads and OCaml domains can call
+  each other (OCaml 5, Unix)
+
+- Support of the free-threaded builds of Python (3.13t and later)
+
+- The Python library is also looked for with the build configuration of
+  the interpreter (`sysconfig`: `LIBDIR` and `LDLIBRARY`), which finds the
+  library of the free-threaded builds (`libpython3.14t.so`) and of the
+  interpreters linked statically (python-build-standalone, uv), and with
+  the names of the free-threaded builds in the other directories.
+
 # 2025-08-07
 
 - Support OCaml only back to 4.11

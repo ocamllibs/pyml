@@ -2218,6 +2218,69 @@ module Gil : sig
   *)
 end
 
+(** Threads and domains.
+
+    By default, pyml supposes that a single OCaml thread uses Python, and
+    that Python calls OCaml from this thread only. Once [enable ()] is
+    called, OCaml threads and domains can call Python, and Python threads
+    (including the threads of free-threaded builds of Python) can call
+    OCaml. pyml then manages three locks: a lock of its own, held by the
+    thread that runs the OCaml code of the libraries that use pyml (it
+    protects their state, which the GIL does not protect), the GIL (or the
+    attached thread state of free-threaded builds), and the lock of the
+    OCaml domain. They are taken in this order: no thread waits for the
+    GIL while holding the lock of its domain (the minor collections wait
+    for all the domains whose lock is held).
+
+    - The Python threads that call OCaml are registered in the OCaml
+      runtime (in the first domain), and take the locks during the call.
+    - The OCaml code that does not need the lock of pyml runs in
+      [run_ocaml]: other threads can then call OCaml from Python, or Python
+      from OCaml. The code keeps the GIL (it can use the Python API, and
+      compare or hash Python objects), except in the blocking sections of
+      OCaml (waiting for a mutex, a condition, a domain, I/O...), where the
+      GIL is released, and taken again before the lock of the domain at the
+      end of the blocking section. OCaml code in [run_ocaml] that waits for
+      another thread without blocking (busy waiting) keeps the GIL.
+    - OCaml threads and domains other than the one that called [enable] run
+      the code that uses the Python API in [run_python].
+    - [call] calls a Python function, and releases the locks of OCaml
+      during the call (in [run_ocaml] too), so that the Python code can
+      wait for other threads that call OCaml.
+    - The Python code called otherwise (by [Callable.to_function], for
+      instance, or by the comparison and the hash of Python objects) runs
+      with the lock of the domain, and should not wait (for I/O, a lock,
+      another thread...) nor run for long: Python can then release the GIL
+      and wait for it while holding the lock of the domain, which another
+      thread that holds the GIL may wait for.
+
+    Threads need OCaml >= 5, the OCaml library [threads] (linked in the
+    program) and POSIX threads. The Python code called by the comparison or
+    the hash of Python objects in OCaml cannot call OCaml in [run_ocaml]
+    ([RuntimeError]). *)
+module Thread : sig
+  val enable : unit -> unit
+  (** [enable ()] enables threads: the current thread holds the locks. A
+      program that started OCaml from Python returns to Python with the C
+      function [pyml_thread_leave ()], which releases the locks of OCaml. *)
+
+  val enabled : unit -> bool
+  (** [enabled ()] returns [true] once [enable ()] has been called. *)
+
+  val run_ocaml : (unit -> 'a) -> 'a
+  (** [run_ocaml f] runs [f ()] without the lock of pyml, and releases the
+      GIL in the blocking sections of OCaml. *)
+
+  val run_python : (unit -> 'a) -> 'a
+  (** [run_python f] runs [f ()] with the locks of Python, in any OCaml
+      thread or domain. *)
+
+  val call : ?kwargs:Object.t -> Object.t -> Object.t -> Object.t
+  (** [call ?kwargs f args] calls the Python callable [f] with the tuple
+      [args] (and the dictionary [kwargs]), releasing the locks of OCaml
+      during the call. *)
+end
+
 val set_argv: string array -> unit
 (** [set_argv argv] set Python's [sys.argv]. *)
 
