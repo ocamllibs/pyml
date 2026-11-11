@@ -1,5 +1,21 @@
 [*] marks changes that break compatibility with previous versions.
 
+# Next version
+
+- Fix `Py.initialize` when `pkg-config` gives no `-l` flag for the Python
+  library, as with the framework builds of Python on macOS (Homebrew),
+  whose `pkg-config --libs python-3.13` only gives a `-L` flag: the error
+  "Py.find_library_path: unable to parse the output of pkg-config"
+  prevented the other heuristics from finding the library. `pkg-config` is
+  now asked for `python-X.Y-embed` first (which has the `-l` flag since
+  Python 3.8), the usual names of the library are looked for in the `-L`
+  directories otherwise, and a heuristic that fails no longer prevents the
+  others from being tried.
+
+- When the Python library is not found, the error of `Py.initialize` gives
+  the outcome of each heuristic (its candidate libraries, or why it
+  failed), as well as the libraries that failed to load.
+
 # 2025-08-07
 
 - Support OCaml only back to 4.11

@@ -374,44 +374,6 @@ let library_suffix =
   | Pyml_arch.Mac -> ".dylib"
   | _ -> ".so"
 
-let libpython_from_pkg_config version_major version_minor =
-  let command =
-    Printf.sprintf "pkg-config --libs python-%d.%d" version_major
-      version_minor in
-  match run_command_opt command false with
-    Some (words :: _) ->
-      let word_list = String.split_on_char ' ' words in
-      let unable_to_parse () =
-        let msg = Printf.sprintf
-        "Py.find_library_path: unable to parse the output of pkg-config '%s'"
-            words in
-        failwith msg in
-      let parse_word (library_paths, library_filename) word =
-        if String.length word > 2 then
-          match String.sub word 0 2 with
-            "-L" ->
-              let word' =
-                Pyutils.substring_between word 2 (String.length word) in
-              (word' :: library_paths, library_filename)
-          | "-l" ->
-              let word' =
-                Pyutils.substring_between word 2 (String.length word) in
-              if library_filename <> None then
-                unable_to_parse ();
-              let library_filename =
-                Printf.sprintf "lib%s%s" word' library_suffix in
-              (library_paths, Some library_filename)
-          | _ -> (library_paths, library_filename)
-        else (library_paths, library_filename) in
-      let (library_paths, library_filename) =
-        List.fold_left parse_word ([], None) word_list in
-      let library_filename =
-        match library_filename with
-          None -> unable_to_parse ()
-        | Some library_filename -> library_filename in
-      Some (concat_library_filenames library_paths [library_filename])
-  | _ -> None
-
 let library_patterns : (int -> int -> string) list =
   match Pyml_arch.os with
   | Pyml_arch.Windows ->
@@ -459,6 +421,48 @@ let libpython_from_python_config_prefix version_major version_minor =
       Some (library_filenames_from_paths version_major version_minor library_paths)
   | _ -> None
 
+(* Since Python 3.8, [pkg-config --libs python-X.Y] gives no [-l] flag for
+   libpython (only [python-X.Y-embed] does), and the framework builds of
+   macOS (Homebrew) only give a [-L] flag: the library is then looked for
+   with the usual names in the [-L] directories. *)
+let libpython_from_pkg_config version_major version_minor =
+  let pkg_config package =
+    match
+      run_command_opt (Printf.sprintf "pkg-config --libs %s" package) false
+    with
+    | Some (words :: _) -> Some words
+    | _ -> None in
+  let packages = [
+    Printf.sprintf "python-%d.%d-embed" version_major version_minor;
+    Printf.sprintf "python-%d.%d" version_major version_minor] in
+  match List.find_map pkg_config packages with
+  | Some words ->
+      let word_list = String.split_on_char ' ' words in
+      let parse_word (library_paths, library_filenames) word =
+        if String.length word > 2 then
+          let argument = Pyutils.substring_between word 2 (String.length word) in
+          match String.sub word 0 2 with
+          | "-L" -> (argument :: library_paths, library_filenames)
+          | "-l" when String.length argument >= 6
+              && String.sub argument 0 6 = "python" ->
+              (library_paths,
+                Printf.sprintf "lib%s%s" argument library_suffix
+                :: library_filenames)
+          | _ -> (library_paths, library_filenames)
+        else (library_paths, library_filenames) in
+      let (library_paths, library_filenames) =
+        List.fold_left parse_word ([], []) word_list in
+      let library_paths = List.rev library_paths in
+      begin match library_filenames with
+      | [] ->
+          Some (library_filenames_from_paths version_major version_minor
+            library_paths)
+      | _ ->
+          Some (concat_library_filenames library_paths
+            (List.rev library_filenames))
+      end
+  | _ -> None
+
 let getenv_opt var =
   try Some (Sys.getenv var)
   with Not_found -> None
@@ -492,37 +496,42 @@ let libpython_from_pythonpath version_major version_minor =
       let dir = Filename.dirname filename in
       Some (library_filenames_from_paths version_major version_minor [dir])
 
-let find_library_path version_major version_minor python_full_path =
+(* [find_library_path version_major version_minor python_full_path] is the
+   outcome of each heuristic, by name: the candidate library filenames, or
+   the message of its failure. A heuristic that fails (on an unexpected
+   output of a command) must not prevent the others from finding the
+   library, and its failure is reported if no library is found. *)
+let find_library_path version_major version_minor python_full_path
+    : (string * (string list, string) result) list =
+  let with_version f () =
+    Option.bind version_major (fun version_major ->
+      Option.bind version_minor (fun version_minor ->
+        f version_major version_minor)) in
   let heuristics = [
+    "interpreter",
     (fun () ->
       Option.bind python_full_path (fun path ->
         Option.map (fun path -> [path]) (libpython_from_interpreter path)));
+    "ldconfig",
     (fun () ->
       Option.map (fun path -> [path])
         (libpython_from_ldconfig version_major version_minor));
-    (fun () ->
-      Option.bind version_major (fun version_major ->
-        Option.bind version_minor (fun version_minor ->
-          libpython_from_pkg_config version_major version_minor)));
-    (fun () ->
-      Option.bind version_major (fun version_major ->
-        Option.bind version_minor (fun version_minor ->
-          libpython_from_python_config_prefix version_major version_minor)));
-    (fun () ->
-      Option.bind version_major (fun version_major ->
-        Option.bind version_minor (fun version_minor ->
-          libpython_from_python_config version_major version_minor)));
-    (fun () ->
-      Option.bind version_major (fun version_major ->
-        Option.bind version_minor (fun version_minor ->
-          Some (libpython_from_pythonhome version_major version_minor
-            python_full_path))));
-    (fun () ->
-      Option.bind version_major (fun version_major ->
-        Option.bind version_minor (fun version_minor ->
-          libpython_from_pythonpath version_major version_minor)));
+    "pkg-config", with_version libpython_from_pkg_config;
+    "python-config --prefix",
+    with_version libpython_from_python_config_prefix;
+    "python-config --ldflags", with_version libpython_from_python_config;
+    "PYTHONHOME",
+    with_version (fun version_major version_minor ->
+      Some (libpython_from_pythonhome version_major version_minor
+        python_full_path));
+    "PYTHONPATH", with_version libpython_from_pythonpath;
   ] in
-  List.concat (List.map (fun f -> Option.value ~default:[] (f ())) heuristics)
+  let outcome (name, f) =
+    let result =
+      try Ok (Option.value ~default:[] (f ()))
+      with Failure msg -> Error msg in
+    (name, result) in
+  List.map outcome heuristics
 
 let python_version_from_interpreter interpreter =
   let version_line =
@@ -544,16 +553,35 @@ let find_library ~verbose ~version_major ~version_minor ~debug_build:_
   try
     load_library None
   with Failure _ ->
-    let library_filenames =
+    let outcomes =
       find_library_path version_major version_minor python_full_path in
+    let describe_outcome (name, result) =
+      match result with
+      | Ok [] -> Printf.sprintf "%s: no candidate" name
+      | Ok filenames ->
+          Printf.sprintf "%s: %s" name (String.concat ", " filenames)
+      | Error msg ->
+          if verbose then
+            begin
+              Printf.eprintf "Heuristic %s failed: \"%s\".\n" name msg;
+              flush stderr;
+            end;
+          Printf.sprintf "%s: failed (%s)" name msg in
+    let heuristics = List.map describe_outcome outcomes in
+    let library_filenames =
+      List.concat_map
+        (fun (_name, result) ->
+          match result with Ok filenames -> filenames | Error _ -> [])
+        outcomes in
     let errors = Buffer.create 17 in
     let rec try_load_library library_filenames =
       match library_filenames with
         [] ->
           let msg =
             Printf.sprintf
-              "Py.find_library: unable to find the Python library%s"
-              (Buffer.contents errors) in
+              "Py.find_library: unable to find the Python library%s \
+               (heuristics: %s)"
+              (Buffer.contents errors) (String.concat "; " heuristics) in
           failwith msg
       | filename :: others ->
           begin
