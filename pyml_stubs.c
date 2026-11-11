@@ -206,11 +206,113 @@ static void *getcustom( value v )
     return *((void **)Data_custom_val(v));
 }
 
+/* The OCaml GC runs the finalizers of the Python objects in the middle of
+   collections, where the OCaml runtime cannot be used: Py_DECREF can run
+   arbitrary code (deallocators, __del__ methods calling OCaml, destructors
+   of capsules removing OCaml global roots, which deadlocks with OCaml 5
+   when the minor GC holds the lock of the global roots). The finalizer
+   pushes the object to [pending_decrefs] instead, and the list is drained
+   by [pyml_drain_decrefs] when pyml wraps a new object (the garbage is
+   produced at the pace of the allocations) and when pyml is finalized.
+
+   The OCaml 5 domains can run finalizers in parallel: the list is
+   lock-free. The whole list is taken at once, so there is no ABA
+   problem. */
+
+struct pending_decref {
+    PyObject *object;
+    struct pending_decref *next;
+};
+
+static struct pending_decref *pending_decrefs = NULL;
+
+#ifdef _MSC_VER
+static bool
+pending_decrefs_cas(struct pending_decref **expected,
+    struct pending_decref *desired)
+{
+    struct pending_decref *previous = InterlockedCompareExchangePointer(
+        (PVOID volatile *) &pending_decrefs, desired, *expected);
+    if (previous == *expected) {
+        return true;
+    }
+    *expected = previous;
+    return false;
+}
+
+static struct pending_decref *
+pending_decrefs_take(void)
+{
+    return InterlockedExchangePointer(
+        (PVOID volatile *) &pending_decrefs, NULL);
+}
+
+static struct pending_decref *
+pending_decrefs_load(void)
+{
+    return *(struct pending_decref * volatile *) &pending_decrefs;
+}
+#else
+static bool
+pending_decrefs_cas(struct pending_decref **expected,
+    struct pending_decref *desired)
+{
+    return __atomic_compare_exchange_n(&pending_decrefs, expected, desired,
+        false, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+}
+
+static struct pending_decref *
+pending_decrefs_take(void)
+{
+    return __atomic_exchange_n(&pending_decrefs, NULL, __ATOMIC_ACQUIRE);
+}
+
+static struct pending_decref *
+pending_decrefs_load(void)
+{
+    return __atomic_load_n(&pending_decrefs, __ATOMIC_RELAXED);
+}
+#endif
+
 static void pydecref( value v )
 {
-    if (getcustom(v)) {
-        Py_DECREF((PyObject *)getcustom(v));
+    PyObject *object = (PyObject *) getcustom(v);
+    if (!object) {
+        return;
     }
+    struct pending_decref *node = malloc(sizeof(struct pending_decref));
+    if (!node) {
+        /* The object is leaked. */
+        return;
+    }
+    node->object = object;
+    node->next = pending_decrefs_load();
+    while (!pending_decrefs_cas(&node->next, node)) {
+    }
+}
+
+/* Called with the GIL, where OCaml code can run. The decrefs can run
+   finalizers that push other objects: the loop drains them too. */
+static void
+pyml_drain_decrefs(void)
+{
+    if (pending_decrefs_load() == NULL) {
+        return;
+    }
+    PyObject *type, *exc, *traceback;
+    /* The objects are released without changing the current exception. */
+    Python_PyErr_Fetch(&type, &exc, &traceback);
+    struct pending_decref *list;
+    while ((list = pending_decrefs_take()) != NULL) {
+        while (list) {
+            struct pending_decref *next = list->next;
+            PyObject *object = list->object;
+            free(list);
+            Py_DECREF(object);
+            list = next;
+        }
+    }
+    Python_PyErr_Restore(type, exc, traceback);
 }
 
 static int
@@ -430,6 +532,8 @@ pyml_wrap(PyObject *object, bool steal)
     if (!steal) {
         Py_INCREF(object);
     }
+    /* After Py_INCREF: the decrefs cannot release [object]. */
+    pyml_drain_decrefs();
     v = caml_alloc_custom(&pyops, sizeof(PyObject *), 100, 30000000);
     *((PyObject **)Data_custom_val(v)) = object;
     CAMLreturn(v);
@@ -884,6 +988,8 @@ py_finalize_library(value unit)
 {
     CAMLparam1(unit);
     pyml_assert_initialized();
+    /* The objects collected by [Gc.full_major] in [Py.finalize]. */
+    pyml_drain_decrefs();
     Py_DECREF(tuple_empty);
     if (library != get_default_library()) {
         close_library(library);
