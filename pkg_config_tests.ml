@@ -9,6 +9,10 @@ let write_script directory name contents =
   Unix.chmod script 0o755;
   script
 
+(* [perms] is explicit: the default of [Stdcompat.Filename.temp_dir] (when
+   OCaml < 5.1) is 0o600, without the permission to create files. *)
+let temp_dir prefix = Stdcompat.Filename.temp_dir ~perms:0o700 prefix ""
+
 let contains s sub =
   let n = String.length s and m = String.length sub in
   let rec search i = i + m <= n && (String.sub s i m = sub || search (i + 1)) in
@@ -19,10 +23,14 @@ let contains s sub =
    [PATH]: an interpreter of a Python 3.99 that does not exist, and a
    [pkg-config] that gives a directory without library. *)
 let test_not_found () =
-  let directory = Filename.temp_dir "pyml_not_found" "" in
+  let directory = temp_dir "pyml_not_found" in
+  (* The fake interpreter reads the script that pyml writes to its standard
+     input: pyml would be killed by SIGPIPE if the interpreter exited
+     first. *)
   let python =
     write_script directory "python3"
-      "#!/bin/sh\nif [ \"$1\" = --version ]; then echo Python 3.99.0; fi\n" in
+      "#!/bin/sh\ncat > /dev/null\n\
+       if [ \"$1\" = --version ]; then echo Python 3.99.0; fi\n" in
   let pkg_config =
     write_script directory "pkg-config" "#!/bin/sh\necho -L/nonexistent\n" in
   let path = Sys.getenv "PATH" in
@@ -50,7 +58,7 @@ let test_not_found () =
    (Homebrew): [pkg-config --libs python-3.13] gives only
    [-L/opt/homebrew/opt/python@3.13/Frameworks/Python.framework/Versions/3.13/lib]. *)
 let test_pkg_config_without_l () =
-  let directory = Filename.temp_dir "pyml_pkg_config" "" in
+  let directory = temp_dir "pyml_pkg_config" in
   let script =
     write_script directory "pkg-config"
       "#!/bin/sh\n\

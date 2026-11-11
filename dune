@@ -46,7 +46,7 @@
   (name pkg_config_tests)
   (modules pkg_config_tests)
   (enabled_if (<> %{os_type} Win32))
-  (libraries pyml unix))
+  (libraries pyml stdcompat unix))
 
 (rule
   (enabled_if (>= %{ocaml_version} 4.06))
